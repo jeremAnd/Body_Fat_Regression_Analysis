@@ -1,0 +1,179 @@
+---
+title: "Body Fat Regression Analysis"
+author: "Jeremiah Anderson (5744842)"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: pdf_document
+---
+
+
+```{r setup, echo=FALSE}
+library(knitr)
+library(MASS)
+library(RSQLite)
+# set global chunk options: images will be 7x5 inches
+knitr::opts_chunk$set(
+	fig.height = 5,
+	fig.width = 7,
+	include = TRUE
+)
+options(digits = 4)
+
+
+## indents are for indenting r code as formatted text
+## They may need to be adjusted depending on your OS
+# if your output looks odd, increase or decrease indent
+indent1 = '    '
+indent2 = '        '
+indent3 = '            '
+```
+
+# Objective
+
+The objective of this assignment is to run regression diagnostics on a linear model where body fat percentage is the response variable.
+
+# Introduction
+
+First, lets read in out dataset and take a look at it.
+
+```{r}
+fat <- read.csv(file = "fat.csv")
+head(fat)
+```
+
+Here, wee see the 8 numeric variables. Brozek, which is percent body fat, is going to be our response variable, while the other 7 will be our predictors. For information on the predictor variables, see the codebook.
+
+# Creating the Model
+
+Now we can fit our model.
+
+```{r cache=TRUE}
+# Set up linear model
+fatMod <- lm(formula = brozek ~ age + weight + height + neck + chest + abdom + hip, data = fat)
+
+# Take a look at the first 5 observations and the first 5 residuals
+head(fitted(fatMod))
+head(residuals(fatMod))
+```
+
+Here we see both the predicted values as well as the residuals. The residuals tell us the difference between the actual values and the predicted values. Now that we have the residuals, we can run our first diagnostic.
+
+# Regression Diagnostics
+
+## Constant Variation Assumption
+
+The constant variance assumption assumes that the variance in the residuals is the same for every observation. If the assumption is not met, there will be inaccuracy in both our confidence intervals and our p-values. To test this assumption, we will plot a the residuals against the fitted values.
+
+```{r cache=TRUE}
+plot(fitted(fatMod), residuals(fatMod), xlab = "fitted", ylab = "residuals")
+```
+
+Since the spread of the residuals is roughly even throughout the fitted values, we can say that the constant variation assumption has been met.
+
+## The Normal Assumption
+
+Next, we can use the residuals to check for normality. We do this by creating a Q-Q plot, or Quantile-Quantile plot, and plotting the residuals to see if they follow the Q-Q line. 
+
+```{r}
+# Plot the residuals from our model
+qqnorm(residuals(fatMod), ylab = "Residuals")
+
+# Plot a normal line
+qqline(residuals(fatMod))
+```
+
+It is evident from this plot that the residuals, also known as random errors, follow a normal distribution. So, it seems that the normal assumption has been met. However, we can go one step further and test for normality with the Shapiro-Wilks test in order to double check.
+
+
+```{r}
+shapiro.test(residuals(fatMod))
+```
+
+This test gives us two things, a p-value and the W statistic. The W statistic is a measure of how well the standardized residuals would fit the corresponding standard normal quantiles. At W = 0.99, we can assume that the normality assumption is met. Additionally, for this test, the null hypothesis is that the random errors follow a normal distribution. Since out p -value is >= 0.5, we would fail to reject such a null hypothesis.
+
+## Serial Correlation
+
+Serial correlation is when the i-th residual and the i-th + 1 residual are more similar than a randomly selected pair on average. This becomes an issue because it effects the standard error of our estimators, causing use to believe they are more accurate than they are. For this reason, linear regression assumes there is no serial correlation among observations. Lets take a look at a plot of successive pairs of residuals to see whether this assumption is met.
+
+```{r}
+n <- nrow(fat)
+plot(tail(residuals(fatMod), n-1) ~ head(residuals(fatMod), n-1),
+     xlab = "i-th residual", ylab = "(i+1)th residual")
+abline(h=0, v=0)
+```
+
+We can see that there is no trend in the plot, and the residual pairs seem to be spread randomly. This is evidence that there is no serial correlation among pairs.
+
+# High Leverage Points
+
+Next we will test for high leverage points. High leverage points are data points with an extremely high or extremely low predictor value. When we have high leverage points, a single predictor can have too much or too little influence on the response variable. For this diagnostic, we will say any leverage point above 3(p+1)/n is a high leverage point, where p is the number of predictors.
+
+```{r}
+# Calculate leverage points
+x <- model.matrix(fatMod)
+H <- x %*% solve(crossprod(x), t(x))
+lev <- diag(H)
+sum(lev)
+```
+
+
+```{r}
+# Store the number of predictors in a variable
+p <- 7
+
+# Create a dataframe with the leverage points
+dat <- data.frame(index = seq(length(lev)), leverage = lev)
+
+# Plot the leverage points as well as the cutoff line\
+plot(leverage ~ index, col = "white", data = dat, pch = NULL)
+text(leverage ~ index, labels = index, data = dat, cex = 0.9, font =2)
+abline(h = 3*(p+1)/n, col = "red", lty = 2)
+```
+
+We can see from the graph that points 36, 39, 106, and 42 are high leverage points. Since the objective of this program is analysis, we won't change anything in the model. Still, it is important to know that these points have extreme predictor values and influence the accuracy of the model.
+
+## Outliers
+
+Outliers are observations that are far from the other observations. Outliers can interfere with the results of a hypothesis test by skewing the data. It can to rejection of a true null hypothesis or acceptance of a false null hypothesis. To test for outliers, we will compute the standardized residuals of out model. Any observation above 3, or below -3 will be considered and outlier.
+
+```{r}
+# Use the residual standard error to standardize the residuals
+rse <- summary(fatMod)$sigma
+r <- residuals(fatMod)/(rse *sqrt(1-lev))
+r 
+```
+
+From our data we can see that there is one outlier, observation 39. Since this observation is so far from the others, the results of a hypothesis test could be skewed towards it.
+
+## Influential Points
+
+Influential points are points the have a high impact on the slope of the regression line. Removing an influential point will always change the model significantly. It is important to test for influential points and to see if they may be cause by an error. It is also important to decide whether or not to remove the influential points. We will use an estimate called Cook's Distance, in order to test for influential points. Any observation with a Cook's Distance above 0.02 will be called high influence points.
+
+
+```{r}
+# Calculate cook's distance for all of the leverage points
+d <- r^2*lev / (1-lev) / (p+1)
+
+# FIlter out observations with a Cook's distance greater thanm 0.02
+d[d>0.02]
+```
+
+We see 4 observations with a Cook's distance greater than 0.02. We will say that observations 39, 42, 207, and 250 are influential points.
+
+## Box-Cox Transformation
+
+Lastly, just for fun, we will test to see if a box-cox transformation is needed. Box-cox transformations are used to transform data that is non-normally distributed into a normal shape. Both the Q-Q plot and the Shapiro-Wilks test implied normality so this test isn't necessary, but it's good pracitce. We will plot the model and test whether the 95% confidence interval contains 1.
+
+```{r}
+# Remove observations where the response variable is 0
+fat_fixed <-fat[fat$brozek !=0,]
+
+# Create a new model that is stricly positive and plot
+fatmod_fixed <- lm(formula = brozek ~ age + weight + height + neck + chest + abdom + hip, data = fat_fixed)
+boxcox(fatmod_fixed)
+```
+
+As expected, Boxcox is not needed as the confidence interval contains 1. The boxcox transformation is designed for strictly positive responses, so that's why we had to remove observations where brozek = 0.
+
+# Summary
+
+In the end we found that the data is normally distributed, has constant variance, and has no serial correlation among observations. There were 4 high leverage points, 1 outlier, and 4 influential points. Observations 39 and 42 were both high-leverage points and influential points. Observation 39 was also an outlier.
